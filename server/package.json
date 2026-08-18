@@ -1,0 +1,32 @@
+{
+  "name": "atem-web-tally",
+  "version": "1.0.0",
+  "description": "Wireless web + M5StickS3 tally lights for Blackmagic ATEM switchers. Read-only, one server, unlimited clients.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "atem-connection": "^3.5.0",
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Jithin Mathew (https://jithinmathew.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOURNAME/atem-web-tally.git"
+  },
+  "keywords": [
+    "atem",
+    "tally",
+    "blackmagic",
+    "tally-light",
+    "m5stack",
+    "esp32",
+    "livestream"
+  ]
+}

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATEM Web Tally — Setup</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { max-width: 640px; margin: 0 auto; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .wizard-progress { height: 4px; }
+</style>
+</head>
+<body class="p-4">
+<h3 class="mb-1">ATEM Web Tally</h3>
+<p class="text-secondary">First-time setup</p>
+<div class="progress wizard-progress mb-4"><div id="bar" class="progress-bar" style="width:25%"></div></div>
+
+<!-- STEP 1: switcher -->
+<div class="step active" data-step="1">
+  <h5>1 · Your switcher</h5>
+  <div class="mb-3">
+    <label class="form-label">ATEM model</label>
+    <select id="model" class="form-select">
+      <option value="ATEM Mini|4">ATEM Mini (4 inputs)</option>
+      <option value="ATEM Mini Pro|4">ATEM Mini Pro (4 inputs)</option>
+      <option value="ATEM Mini Pro ISO|4">ATEM Mini Pro ISO (4 inputs)</option>
+      <option value="ATEM Mini Extreme|8">ATEM Mini Extreme (8 inputs)</option>
+      <option value="ATEM Mini Extreme ISO|8">ATEM Mini Extreme ISO (8 inputs)</option>
+      <option value="ATEM SDI|4">ATEM SDI (4 inputs)</option>
+      <option value="ATEM SDI Pro ISO|4">ATEM SDI Pro ISO (4 inputs)</option>
+      <option value="ATEM SDI Extreme ISO|8">ATEM SDI Extreme ISO (8 inputs)</option>
+      <option value="ATEM Television Studio HD|8">ATEM Television Studio HD (8 inputs)</option>
+      <option value="ATEM Television Studio HD8|8">ATEM Television Studio HD8 (8 inputs)</option>
+      <option value="ATEM Constellation HD 1 M/E|10">ATEM Constellation HD 1 M/E (10 inputs)</option>
+      <option value="ATEM Constellation HD 2 M/E|20">ATEM Constellation HD 2 M/E (20 inputs)</option>
+      <option value="custom|4">Other / custom…</option>
+    </select>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Tally-tracked inputs</label>
+    <input id="camCount" type="number" class="form-control" min="1" max="40" value="4">
+    <div class="form-text">How many inputs get tally lights (usually your camera inputs).</div>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">ATEM IP address</label>
+    <div class="input-group">
+      <input id="atemIp" class="form-control" placeholder="192.168.1.240">
+      <button id="testBtn" class="btn btn-outline-primary">Test connection</button>
+    </div>
+    <div id="testResult" class="form-text"></div>
+  </div>
+  <button class="btn btn-primary next">Next</button>
+</div>
+
+<!-- STEP 2: input names -->
+<div class="step" data-step="2">
+  <h5>2 · Name your inputs</h5>
+  <p class="text-secondary">Shown on every tally. Leave blank to use the ATEM's own labels.</p>
+  <div id="nameFields" class="mb-3"></div>
+  <button class="btn btn-outline-secondary back">Back</button>
+  <button class="btn btn-primary next">Next</button>
+</div>
+
+<!-- STEP 3: tally behavior -->
+<div class="step" data-step="3">
+  <h5>3 · Tally behavior (hardware units)</h5>
+  <p class="text-secondary">Defaults for M5StickS3 tallies. Skip if you'll only use phones.</p>
+  <div class="mb-3">
+    <label class="form-label">Program (LIVE) brightness: <span id="pgmVal">255</span></label>
+    <input id="pgmBright" type="range" class="form-range" min="30" max="255" value="255">
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Preview brightness: <span id="pvwVal">60</span></label>
+    <input id="pvwBright" type="range" class="form-range" min="10" max="255" value="60">
+    <div class="form-text">Preview is operator-facing — lower saves battery.</div>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Low-battery warning at (%)</label>
+    <input id="lowBatt" type="number" class="form-control" min="5" max="90" value="20">
+  </div>
+  <button class="btn btn-outline-secondary back">Back</button>
+  <button class="btn btn-primary next">Next</button>
+</div>
+
+<!-- STEP 4: mode + password -->
+<div class="step" data-step="4">
+  <h5>4 · Mode & access</h5>
+  <div class="form-check mb-2">
+    <input class="form-check-input" type="radio" name="mode" id="modeRO" value="readonly" checked>
+    <label class="form-check-label" for="modeRO">
+      <strong>Read-only</strong> (recommended) — this system only <em>displays</em> tally.
+      It can never switch cameras or send any command to the ATEM.
+    </label>
+  </div>
+  <div class="form-check mb-3">
+    <input class="form-check-input" type="radio" name="mode" id="modeSW" value="switcher">
+    <label class="form-check-label" for="modeSW">
+      <strong>Remote switcher mode</strong> — password holders can also set preview
+      and CUT/AUTO from the admin page. Everyone without the password stays read-only.
+    </label>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Admin password <span id="pwReq" class="text-secondary">(optional in read-only mode — protects settings)</span></label>
+    <input id="pw1" type="password" class="form-control mb-2" autocomplete="new-password">
+    <input id="pw2" type="password" class="form-control" placeholder="Confirm" autocomplete="new-password">
+    <div class="form-text">If set, changing settings (and switching, if enabled) requires login. Viewing tally never does.</div>
+  </div>
+  <div id="setupError" class="alert alert-danger d-none"></div>
+  <button class="btn btn-outline-secondary back">Back</button>
+  <button id="finish" class="btn btn-success">Finish setup</button>
+</div>
+
+<div class="text-center mt-4" style="opacity:.5;font-size:.8rem">
+  ATEM Web Tally &middot; MIT &middot; by <a href="https://jithinmathew.com" class="link-light" target="_blank" rel="noopener">Jithin Mathew</a>
+</div>
+
+<script>
+let step = 1;
+const totalSteps = 4;
+const authHeader = () => {
+  const t = sessionStorage.getItem('tallyToken');
+  return t ? { 'Authorization': 'Bearer ' + t } : {};
+};
+
+function show(n) {
+  step = n;
+  document.querySelectorAll('.step').forEach(s => s.classList.toggle('active', Number(s.dataset.step) === n));
+  document.getElementById('bar').style.width = (n / totalSteps * 100) + '%';
+  if (n === 2) buildNameFields();
+}
+document.querySelectorAll('.next').forEach(b => b.onclick = () => show(step + 1));
+document.querySelectorAll('.back').forEach(b => b.onclick = () => show(step - 1));
+
+document.getElementById('model').onchange = function () {
+  const cams = this.value.split('|')[1];
+  if (cams) document.getElementById('camCount').value = cams;
+};
+document.getElementById('pgmBright').oninput = function(){ document.getElementById('pgmVal').textContent = this.value; };
+document.getElementById('pvwBright').oninput = function(){ document.getElementById('pvwVal').textContent = this.value; };
+document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
+  const sw = document.getElementById('modeSW').checked;
+  document.getElementById('pwReq').textContent = sw
+    ? '(required for switcher mode, min 6 chars)'
+    : '(optional in read-only mode — protects settings)';
+});
+
+function buildNameFields() {
+  const count = Number(document.getElementById('camCount').value) || 4;
+  const wrap = document.getElementById('nameFields');
+  const existing = {};
+  wrap.querySelectorAll('input').forEach(i => existing[i.dataset.n] = i.value);
+  wrap.innerHTML = '';
+  for (let i = 1; i <= count; i++) {
+    wrap.insertAdjacentHTML('beforeend', `
+      <div class="input-group input-group-sm mb-2">
+        <span class="input-group-text" style="width:3rem">${i}</span>
+        <input class="form-control" data-n="${i}" value="${existing[i] || ''}" placeholder="Input ${i} (e.g. Pulpit)">
+      </div>`);
+  }
+}
+
+document.getElementById('testBtn').onclick = async function () {
+  const out = document.getElementById('testResult');
+  out.textContent = 'Testing…';
+  try {
+    const r = await fetch('/api/setup/test', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ atemIp: document.getElementById('atemIp').value }) });
+    const j = await r.json();
+    out.textContent = j.ok ? ('✓ Connected: ' + j.detail) : ('✗ ' + (j.detail || j.error));
+    out.className = 'form-text ' + (j.ok ? 'text-success' : 'text-danger');
+  } catch { out.textContent = '✗ request failed'; out.className = 'form-text text-danger'; }
+};
+
+document.getElementById('finish').onclick = async function () {
+  const err = document.getElementById('setupError');
+  err.classList.add('d-none');
+  const mode = document.getElementById('modeSW').checked ? 'switcher' : 'readonly';
+  const pw1 = document.getElementById('pw1').value;
+  const pw2 = document.getElementById('pw2').value;
+  if (pw1 !== pw2) { err.textContent = 'Passwords do not match.'; err.classList.remove('d-none'); return; }
+  if (mode === 'switcher' && pw1.length < 6) { err.textContent = 'Switcher mode requires a password of at least 6 characters.'; err.classList.remove('d-none'); return; }
+
+  const inputNames = {};
+  document.querySelectorAll('#nameFields input').forEach(i => { if (i.value.trim()) inputNames[i.dataset.n] = i.value.trim(); });
+
+  const body = {
+    atemModel: document.getElementById('model').value.split('|')[0],
+    atemIp: document.getElementById('atemIp').value,
+    cameraCount: Number(document.getElementById('camCount').value) || 4,
+    inputNames,
+    behavior: {
+      pgmBright: Number(document.getElementById('pgmBright').value),
+      pvwBright: Number(document.getElementById('pvwBright').value),
+      lowBatteryPct: Number(document.getElementById('lowBatt').value)
+    },
+    mode,
+    password: pw1
+  };
+  const r = await fetch('/api/setup', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!j.ok) { err.textContent = j.error || 'Setup failed.'; err.classList.remove('d-none'); return; }
+  location.href = '/admin.html';
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<title>Tally</title>
+<style>
+  * { -webkit-tap-highlight-color: transparent; user-select: none; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff;
+               font-family: system-ui, sans-serif; overflow: hidden; }
+
+  /* ---- Camera selection ---- */
+  #picker { height: 100%; display: none; flex-direction: column; padding: 4vh 4vw; box-sizing: border-box; }
+  #picker.show { display: flex; }
+  #picker h1 { font-size: 3.5vh; font-weight: 600; margin: 0 0 2vh; opacity: .9; }
+  #camGrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 2vh; }
+  .camBtn { border: 2px solid #333; border-radius: 16px; background: #111; color: #fff;
+            font-size: 3vh; font-weight: 700; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 1vh; cursor: pointer; }
+  .camBtn small { font-size: 1.8vh; font-weight: 400; opacity: .7; }
+  .camBtn.pgm { background: #c0201d; border-color: #c0201d; }
+  .camBtn.pvw { background: #1d8a3a; border-color: #1d8a3a; }
+  #pickerStatus { text-align: center; padding-top: 1.5vh; font-size: 1.8vh; opacity: .6; }
+
+  /* ---- Full-screen tally ---- */
+  #stage { height: 100%; display: none; flex-direction: column; align-items: center;
+           justify-content: center; transition: background .1s; }
+  #stage.show { display: flex; }
+  #letter { font-size: 40vh; font-weight: 800; line-height: 1; }
+  #camName { font-size: 4.5vh; opacity: .85; letter-spacing: .1em; text-align: center; }
+  #hint { position: fixed; bottom: 10px; width: 100%; text-align: center;
+          font-size: 1.6vh; opacity: .35; }
+  #hb { position: fixed; top: 12px; right: 12px; width: 14px; height: 14px;
+        border-radius: 50%; background: #333; }
+  #hb.alive { background: #2ecc71; }
+  .lost #letter { color: #e6a817; }
+</style>
+</head>
+<body>
+
+<div id="picker">
+  <h1>Select camera</h1>
+  <div id="camGrid"></div>
+  <div id="pickerStatus">connecting…</div>
+  <div style="text-align:center;font-size:1.5vh;opacity:.35;padding-top:.5vh">
+    ATEM Web Tally &middot; <a href="https://jithinmathew.com" style="color:inherit" target="_blank" rel="noopener">jithinmathew.com</a>
+  </div>
+</div>
+
+<div id="stage">
+  <div id="letter">·</div>
+  <div id="camName">CAM ?</div>
+  <div id="hint">hold anywhere to change camera</div>
+</div>
+<div id="hb"></div>
+
+<script>
+let state = null;
+let lastMsg = 0;
+let cam = Number(new URLSearchParams(location.search).get('cam') || localStorage.getItem('tallyCam') || 0);
+
+const picker = document.getElementById('picker');
+const stage  = document.getElementById('stage');
+
+function inputName(n) {
+  return (state && state.inputNames && state.inputNames[n]) || ('Input ' + n);
+}
+
+function showPicker() {
+  cam = 0;
+  localStorage.removeItem('tallyCam');
+  history.replaceState(null, '', location.pathname);
+  stage.classList.remove('show');
+  picker.classList.add('show');
+  renderPicker();
+}
+
+function selectCam(n) {
+  cam = n;
+  localStorage.setItem('tallyCam', String(n));
+  history.replaceState(null, '', location.pathname + '?cam=' + n);
+  picker.classList.remove('show');
+  stage.classList.add('show');
+  renderStage();
+}
+
+function renderPicker() {
+  if (!picker.classList.contains('show')) return;
+  const grid = document.getElementById('camGrid');
+  const count = state ? state.cameraCount : 4;
+  if (grid.children.length !== count) {
+    grid.innerHTML = '';
+    for (let i = 1; i <= count; i++) {
+      const b = document.createElement('button');
+      b.className = 'camBtn';
+      b.dataset.n = i;
+      b.onclick = () => selectCam(i);
+      grid.appendChild(b);
+    }
+  }
+  for (const b of grid.children) {
+    const n = Number(b.dataset.n);
+    const bits = state ? (state.tally[n - 1] || 0) : 0;
+    b.classList.toggle('pgm', !!(bits & 1));
+    b.classList.toggle('pvw', !(bits & 1) && !!(bits & 2));
+    b.innerHTML = `${inputName(n)}<small>Input ${n}${(bits & 1) ? ' — LIVE' : (bits & 2) ? ' — preview' : ''}</small>`;
+  }
+  document.getElementById('pickerStatus').textContent =
+    !state ? 'connecting…'
+    : state.atemConnected ? 'connected — buttons show live tally'
+    : 'server up, ATEM disconnected';
+}
+
+function renderStage() {
+  if (!stage.classList.contains('show')) return;
+  const letter = document.getElementById('letter');
+  const nameEl = document.getElementById('camName');
+  nameEl.textContent = cam >= 1 ? inputName(cam) : 'CAM ?';
+  const alive = state && (Date.now() - lastMsg < 3000);
+  const lost = !alive || !state.atemConnected || cam < 1;
+  document.body.classList.toggle('lost', lost);
+  if (lost) { stage.style.background = '#000'; letter.textContent = '?'; letter.style.color = '#e6a817'; return; }
+  letter.style.color = '';
+  const bits = state.tally[cam - 1] || 0;
+  if (bits & 1)      { stage.style.background = '#c0201d'; letter.textContent = 'L'; }
+  else if (bits & 2) { stage.style.background = '#1d8a3a'; letter.textContent = 'P'; }
+  else               { stage.style.background = '#000';    letter.textContent = '\u00b7'; }
+}
+
+// Long-press (600 ms) anywhere on the tally returns to camera selection.
+let pressTimer = null;
+stage.addEventListener('pointerdown', () => { pressTimer = setTimeout(showPicker, 600); });
+stage.addEventListener('pointerup',    () => clearTimeout(pressTimer));
+stage.addEventListener('pointercancel',() => clearTimeout(pressTimer));
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onmessage = (e) => {
+    state = JSON.parse(e.data);
+    lastMsg = Date.now();
+    renderPicker();
+    renderStage();
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+connect();
+
+setInterval(() => {
+  const alive = Date.now() - lastMsg < 3000;
+  document.getElementById('hb').classList.toggle('alive', alive && (Date.now() % 5000) < 300);
+  renderStage();
+}, 200);
+
+// Keep the screen awake where supported.
+if ('wakeLock' in navigator) {
+  const req = () => navigator.wakeLock.request('screen').catch(() => {});
+  req(); document.addEventListener('visibilitychange', req);
+}
+
+// Initial view
+if (cam >= 1) { stage.classList.add('show'); renderStage(); }
+else { picker.classList.add('show'); renderPicker(); }
+</script>
+</body>
+</html>
