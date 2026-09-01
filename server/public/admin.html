@@ -173,6 +173,9 @@ function render() {
     }
   }
 
+  // Skip the rebuild while an input inside the table has focus, otherwise the
+  // 2 s state push wipes what the user is typing.
+  if (document.querySelector('#devTable :focus')) return;
   table.clear();
   for (const [mac, d] of Object.entries(state.devices)) {
     const low = d.batt !== null && d.batt <= state.lowBatteryPct;

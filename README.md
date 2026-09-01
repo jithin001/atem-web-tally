@@ -56,7 +56,7 @@ tally state out to any number of clients:
 Requires [Node.js](https://nodejs.org) 18+.
 
 ```bash
-git clone https://github.com/YOURNAME/atem-web-tally.git
+git clone https://github.com/jithin001/atem-web-tally.git
 cd atem-web-tally/server
 npm install
 node server.js
@@ -74,8 +74,13 @@ Open `http://<server-ip>:3000` → the setup wizard takes it from there. Then:
 ```bash
 ./install-mac.sh              # installs Node if needed + all dependencies
 ./install-mac.sh --service    # also: start at login + restart on crash (launchd)
+./install-mac.sh --status     # service state, log tail, HTTP check
 ./install-mac.sh --uninstall-service
 ```
+
+Keep the project outside Desktop/Documents/Downloads (macOS privacy
+protection blocks background services from reading those folders), enable
+automatic login for the booth user, and disable sleep.
 
 ## Using the web tally
 
@@ -108,15 +113,35 @@ estimated **~minutes left** — mirrored on the admin page so the swap crew
 sees it first. Swap the whole unit; assignment follows the replacement's MAC
 or one round of button presses.
 
-**Verify before buying a fleet** (the StickS3 is recent hardware):
-- Your M5Unified version detects the board and `M5.Power.getBatteryLevel()`
-  returns sane values.
-- `platformio.ini` board definition (`m5stack-stamps3` is the closest stock
-  def; adjust if M5 publishes an official one).
-- `LED_PIN` in `config.h` against the schematic (leave `-1` to use a dim
-  screen pulse as the heartbeat).
-- Your router delivers UDP broadcast promptly to power-saving clients
-  (set AP DTIM to 1–3; disable "broadcast filtering" features).
+**Tested on:** M5StickS3 (ESP32-S3-PICO-1-N8R8), M5Unified 0.2.21 / M5GFX 0.2.28,
+PlatformIO `espressif32` 7.x (Arduino core 2.0.17), ATEM Mini Pro.
+
+**StickS3 build notes (read these — they cost a full evening to learn):**
+- There is no stock PlatformIO board definition for the StickS3. The project
+  builds for the StampS3 (same chip) and tells M5GFX which board it really is
+  with `-DM5GFX_BOARD=26`. Without it M5GFX's autodetect never probes the
+  StickS3 panel and the screen stays dark.
+- M5GFX caches its board detection in NVS, so **erase the flash once before
+  your first upload**: `pio run -t erase && pio run -t upload`.
+- Flashing: hold the side button until the green LED flashes (download mode),
+  then upload. `--before=no_reset` in `platformio.ini` avoids the ESP32-S3
+  USB re-enumeration race that produces "Device not configured" errors.
+- Buttons: side button single-click = reset, double-click = power off,
+  long-press = download mode. Unplugging USB does **not** reset it (battery).
+- Serial output is on the native USB port (`ARDUINO_USB_CDC_ON_BOOT=1`);
+  boot prints the detected board, battery %, and display size for diagnosis.
+
+**Display styles** (`TALLY_STYLE` in `firmware/src/config.h`): `1` (default)
+draws a large red/green dot on black — minimal light spill in dark rooms;
+`0` draws full-field color with a big **L**/**P** — maximum visibility and
+colorblind-safe. Note the panel is an LCD: black pixels do *not* save power;
+use per-device brightness on the admin page for that. Portrait layout
+(battery top-right, camera name bottom); `SCREEN_ROTATION` flips it.
+
+**Reliability:** the server sends every tally update as broadcast *and* as
+unicast to each known device — consumer access points often delay or drop
+broadcast frames to power-saving WiFi clients, and unicast is buffered
+reliably. Firmware uses `WIFI_PS_MIN_MODEM` for the same reason.
 
 ## Protocol (for integrators)
 

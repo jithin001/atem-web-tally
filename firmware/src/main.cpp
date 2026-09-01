@@ -1,5 +1,5 @@
 /**
- * ATEM Web Tally - https://github.com/YOURNAME/atem-web-tally
+ * ATEM Web Tally - https://github.com/jithin001/atem-web-tally
  * MIT License - Built by Jithin Mathew (https://jithinmathew.com)
  *
  * ATEM Tally - M5StickS3 firmware
@@ -13,7 +13,7 @@
  *                4 s of no presses locks it in and informs the server (saved by MAC)
  *   BATTERY      overlay every 15 min (5 min + ETA when <= LOW_BATT_PCT)
  *
- * Power: WiFi modem sleep (WIFI_PS_MAX_MODEM). Tally arrives as UDP broadcast.
+ * Power: WiFi modem sleep (WIFI_PS_MIN_MODEM). Tally arrives as UDP broadcast.
  * Config (camera, name, brightness, input names) is server-side, keyed by MAC.
  */
 
@@ -82,56 +82,77 @@ static const char* camLabel(int cam) {
   return inputNames[cam][0] ? inputNames[cam] : "";
 }
 
-static void drawCorner() {
+// Portrait layout (SCREEN_ROTATION 0/2 -> 135 x 240):
+//   top-right: battery %      center: big letter      bottom: camera name
+static void drawChrome(uint16_t fg, uint16_t bg) {
+  M5.Display.setTextColor(fg, bg);
   M5.Display.setFont(&fonts::Font0);
   M5.Display.setTextSize(2);
-  M5.Display.setTextDatum(bottom_left);
-  M5.Display.setCursor(4, M5.Display.height() - 20);
-  const char* lbl = camLabel(myCamera);
-  if (lbl[0]) M5.Display.printf("%d %s", myCamera, lbl);
-  else        M5.Display.printf("CAM %d", myCamera);
   if (battPct >= 0) {
-    M5.Display.setCursor(M5.Display.width() - 60, M5.Display.height() - 20);
-    M5.Display.printf("%d%%", (int)battPct);
+    char b[8]; snprintf(b, sizeof(b), "%d%%", (int)battPct);
+    M5.Display.setTextDatum(top_right);
+    M5.Display.drawString(b, M5.Display.width() - 4, 4);
   }
+  char cam[32];
+  const char* lbl = camLabel(myCamera);
+  if (myCamera == 0)  snprintf(cam, sizeof(cam), "--");
+  else if (lbl[0])    snprintf(cam, sizeof(cam), "%s", lbl);
+  else                snprintf(cam, sizeof(cam), "Cam %d", myCamera);
+  M5.Display.setTextDatum(bottom_center);
+  M5.Display.drawString(cam, M5.Display.width() / 2, M5.Display.height() - 6);
+  M5.Display.setTextSize(1);
+}
+
+static void drawBigLetter(const char* letter, uint16_t fg, uint16_t bg, uint8_t scale) {
+  // fonts::Font8 is 7-segment numerals only (no letters) -> use a real typeface.
+  M5.Display.setTextColor(fg, bg);
+  M5.Display.setFont(&fonts::FreeSansBold24pt7b);
+  M5.Display.setTextSize(scale);
+  M5.Display.setTextDatum(middle_center);
+  M5.Display.drawString(letter, M5.Display.width() / 2, M5.Display.height() / 2);
   M5.Display.setTextSize(1);
 }
 
 static void drawBig(const char* letter, uint16_t bg, uint16_t fg, uint8_t brightness) {
   screenWake(brightness);
+#if TALLY_STYLE == 1
+  // Dot style: black field, large colored disc, NO letter. Same power as
+  // full-field on this LCD (backlight is the cost), but far less light spill.
+  M5.Display.fillScreen(TFT_BLACK);
+  int r = (M5.Display.width() / 2) - DOT_MARGIN;
+  M5.Display.fillCircle(M5.Display.width() / 2, M5.Display.height() / 2, r, bg);
+  (void)letter;   // dot-only by design; letter is used in style 0
+  drawChrome(TFT_WHITE, TFT_BLACK);
+#else
   M5.Display.fillScreen(bg);
-  M5.Display.setTextColor(fg, bg);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.setTextSize(1);
-  M5.Display.setFont(&fonts::Font8);
-  M5.Display.drawString(letter, M5.Display.width() / 2, M5.Display.height() / 2 - 6);
-  drawCorner();
+  drawBigLetter(letter, fg, bg, 3);
+  drawChrome(fg, bg);
+#endif
 }
 
 static void drawIdentity(int y) {
-  // Small "who am I" footer: name + MAC tail.
+  // Small "who am I" line: name + MAC tail.
   M5.Display.setFont(&fonts::Font0);
   M5.Display.setTextSize(1);
   M5.Display.setTextDatum(bottom_center);
   char line[48];
-  snprintf(line, sizeof(line), "%s  [%s]", myName, macStr + 9); // last 3 MAC octets
+  snprintf(line, sizeof(line), "%s [%s]", myName, macStr + 9);
   M5.Display.drawString(line, M5.Display.width() / 2, y);
 }
 
 static void drawLost() {
   screenWake(60);
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(TFT_ORANGE, TFT_BLACK);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.setFont(&fonts::Font8);
-  M5.Display.drawString("?", M5.Display.width() / 2, M5.Display.height() / 2 - 10);
+  drawBigLetter("?", TFT_ORANGE, TFT_BLACK, 2);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Display.setFont(&fonts::Font0);
   M5.Display.setTextSize(1);
-  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
-  const char* why = (myCamera == 0) ? "unassigned - press button" : "no signal";
-  M5.Display.setTextDatum(bottom_center);
-  M5.Display.drawString(why, M5.Display.width() / 2, M5.Display.height() - 14);
-  drawIdentity(M5.Display.height() - 2);
+  M5.Display.setTextDatum(middle_center);
+  M5.Display.drawString((myCamera == 0) ? "unassigned" : "no signal",
+                        M5.Display.width() / 2, M5.Display.height() / 2 + 52);
+  if (myCamera == 0) M5.Display.drawString("press button", M5.Display.width() / 2, M5.Display.height() / 2 + 64);
+  drawChrome(TFT_WHITE, TFT_BLACK);
+  drawIdentity(M5.Display.height() - 28);
 }
 
 static void drawAssign() {
@@ -143,20 +164,20 @@ static void drawAssign() {
     M5.Display.setFont(&fonts::Font4);
     M5.Display.drawString("UNASSIGN", M5.Display.width() / 2, M5.Display.height() / 2 - 10);
   } else {
-    M5.Display.setFont(&fonts::Font8);
     char n[4]; snprintf(n, sizeof(n), "%d", pendingCam);
-    M5.Display.drawString(n, M5.Display.width() / 2, M5.Display.height() / 2 - 14);
+    drawBigLetter(n, TFT_WHITE, TFT_NAVY, 2);
     const char* lbl = camLabel(pendingCam);
     if (lbl[0]) {
       M5.Display.setFont(&fonts::Font2);
-      M5.Display.drawString(lbl, M5.Display.width() / 2, M5.Display.height() / 2 + 26);
+      M5.Display.drawString(lbl, M5.Display.width() / 2, M5.Display.height() / 2 + 48);
     }
   }
   M5.Display.setFont(&fonts::Font0);
   M5.Display.setTextSize(1);
   M5.Display.setTextDatum(bottom_center);
-  M5.Display.drawString("press = next   wait = save", M5.Display.width() / 2, M5.Display.height() - 12);
-  drawIdentity(M5.Display.height() - 2);
+  M5.Display.drawString("press = next", M5.Display.width() / 2, M5.Display.height() - 26);
+  M5.Display.drawString("wait = save",  M5.Display.width() / 2, M5.Display.height() - 16);
+  drawIdentity(M5.Display.height() - 4);
 }
 
 static void drawBatteryOverlay() {
@@ -165,16 +186,17 @@ static void drawBatteryOverlay() {
   M5.Display.setTextColor(battPct <= LOW_BATT_PCT ? TFT_RED : TFT_WHITE, TFT_BLACK);
   M5.Display.setTextDatum(middle_center);
   M5.Display.setFont(&fonts::Font4);
-  char line1[24];
-  snprintf(line1, sizeof(line1), "BATT %d%%", (int)battPct);
-  M5.Display.drawString(line1, M5.Display.width() / 2, M5.Display.height() / 2 - 18);
+  M5.Display.drawString("BATT", M5.Display.width() / 2, M5.Display.height() / 2 - 40);
+  char pct[8]; snprintf(pct, sizeof(pct), "%d%%", (int)battPct);
+  M5.Display.drawString(pct, M5.Display.width() / 2, M5.Display.height() / 2 - 10);
   if (battPct <= LOW_BATT_PCT && etaMin > 0) {
     char line2[24];
-    snprintf(line2, sizeof(line2), "~%d min left", etaMin);
-    M5.Display.drawString(line2, M5.Display.width() / 2, M5.Display.height() / 2 + 12);
+    snprintf(line2, sizeof(line2), "~%d min", etaMin);
+    M5.Display.setFont(&fonts::Font2);
+    M5.Display.drawString(line2, M5.Display.width() / 2, M5.Display.height() / 2 + 24);
   }
   M5.Display.setFont(&fonts::Font0);
-  drawIdentity(M5.Display.height() - 2);
+  drawIdentity(M5.Display.height() - 4);
   overlayUntilMs = millis() + BATT_OVERLAY_MS;
 }
 
@@ -291,7 +313,7 @@ static void drawAssignSaved() {
   M5.Display.setTextColor(TFT_WHITE, TFT_DARKGREEN);
   M5.Display.setTextDatum(middle_center);
   M5.Display.setFont(&fonts::Font4);
-  M5.Display.drawString("SAVED", M5.Display.width() / 2, M5.Display.height() / 2 - 22);
+  M5.Display.drawString("SAVED", M5.Display.width() / 2, M5.Display.height() / 2 - 30);
   char line[32];
   if (myCamera == 0) snprintf(line, sizeof(line), "unassigned");
   else {
@@ -300,10 +322,10 @@ static void drawAssignSaved() {
     else        snprintf(line, sizeof(line), "Input %d", myCamera);
   }
   M5.Display.setFont(&fonts::Font2);
-  M5.Display.drawString(line, M5.Display.width() / 2, M5.Display.height() / 2 + 12);
+  M5.Display.drawString(line, M5.Display.width() / 2, M5.Display.height() / 2 + 10);
   M5.Display.setFont(&fonts::Font0);
-  drawIdentity(M5.Display.height() - 2);
-  overlayUntilMs = millis() + ASSIGN_CONFIRM_MS;   // reuse overlay hold-off
+  drawIdentity(M5.Display.height() - 4);
+  overlayUntilMs = millis() + ASSIGN_CONFIRM_MS;
 }
 
 static void handleAssignButton() {
@@ -345,9 +367,14 @@ static void render() {
 }
 
 void setup() {
+  Serial.begin(115200);
+  delay(1500);
+  Serial.println("[boot] alive, before M5.begin");
   auto cfg = M5.config();
-  M5.begin(cfg);
-  M5.Display.setRotation(1);
+  M5.begin(cfg);   // board selection: -DM5GFX_BOARD in platformio.ini (see README)
+  Serial.printf("[boot] fw %s board=%d batt=%d%%\n", FW_VERSION, (int)M5.getBoard(), M5.Power.getBatteryLevel());
+  Serial.printf("[boot] display %dx%d\n", M5.Display.width(), M5.Display.height());
+  M5.Display.setRotation(SCREEN_ROTATION);
   screenWake(80);
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
   M5.Display.setTextDatum(middle_center);
@@ -361,16 +388,18 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   while (WiFi.status() != WL_CONNECTED) { delay(200); M5.update(); }
-  esp_wifi_set_ps(WIFI_PS_MAX_MODEM);
+  Serial.printf("[wifi] connected ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // MAX_MODEM skips beacons and misses broadcasts
 
   snprintf(macStr, sizeof(macStr), "%s", WiFi.macAddress().c_str());
 
   // Boot identity screen: lets the swap crew see who this unit is immediately.
   M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setFont(&fonts::Font4);
+  M5.Display.setFont(&fonts::Font2);
+  M5.Display.setTextDatum(middle_center);
   M5.Display.drawString(myName, M5.Display.width() / 2, M5.Display.height() / 2 - 12);
   M5.Display.setFont(&fonts::Font0);
-  drawIdentity(M5.Display.height() - 2);
+  drawIdentity(M5.Display.height() - 4);
 
   tallyUdp.begin(TALLY_PORT);
   statusUdp.begin(0);

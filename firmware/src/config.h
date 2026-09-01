@@ -26,6 +26,16 @@
 #define DEFAULT_CAM_COUNT   4     // until the server tells us maxCam
 #define MAX_CAM_SLOTS       9     // storage for input name labels (1..8)
 
+// ---- Display ----
+// 0 = portrait (USB-C at the bottom), 2 = portrait flipped. 1/3 = landscape.
+#define SCREEN_ROTATION     0
+// Tally style: 0 = full-field color (maximum visibility)
+//              1 = colored dot on black (minimum light spill in dark rooms)
+// NOTE: this is an LCD with a backlight - black pixels do NOT save power.
+// Use pgmBright/pvwBright (admin page) to save power.
+#define TALLY_STYLE         1
+#define DOT_MARGIN          12   // px between dot edge and screen edge (style 1)
+
 // ---- Hardware ----
 // VERIFY against the M5StickS3 schematic before flashing:
 //   - LED pin: set to the onboard LED GPIO. Set to -1 to use a brief dim

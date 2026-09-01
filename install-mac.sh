@@ -6,6 +6,7 @@
 #   ./install-mac.sh --service    also register as a launchd service
 #                                 (starts at login, restarts on crash)
 #   ./install-mac.sh --uninstall-service
+#   ./install-mac.sh --status     show service state, last log lines, HTTP check
 #
 # After install:  ./start.command   (or double-click it in Finder)
 # ============================================================================
@@ -22,12 +23,45 @@ fail()  { printf '\033[1;31m[install]\033[0m %s\n' "$*"; exit 1; }
 
 [ -d "$SERVER_DIR" ] || fail "server/ directory not found next to this script."
 
+case "$SCRIPT_DIR" in
+  "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Downloads"*)
+    warn "This folder is inside Desktop/Documents/Downloads. macOS privacy protection"
+    warn "(TCC) often blocks background services from reading files there, which makes"
+    warn "the launchd service fail silently. Recommended: move the project to ~/atem-web-tally"
+    warn "and re-run this script from there.";;
+esac
+
+# ---------------------------------------------------------------------------
+# Status, if requested
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "--status" ]; then
+  echo "--- launchd ---"
+  if launchctl list | grep -q "$PLIST_LABEL"; then
+    launchctl list | grep "$PLIST_LABEL" | awk '{printf "PID: %s   last exit: %s\n", $1, $2}'
+    echo "(PID '-' means not running; a non-zero exit is the crash/launch error code)"
+  else
+    echo "service not installed (run: ./install-mac.sh --service)"
+  fi
+  echo "--- plist paths ---"
+  [ -f "$PLIST_PATH" ] && grep -A3 ProgramArguments "$PLIST_PATH" | grep string | sed 's/<[^>]*>//g'
+  echo "--- last log lines ---"
+  tail -n 15 "$SERVER_DIR/logs/err.log" 2>/dev/null || echo "(no err.log yet)"
+  echo "--- HTTP check ---"
+  PORT="$(node -p "try{JSON.parse(require('fs').readFileSync('$SERVER_DIR/config.json')).httpPort||3000}catch(e){3000}" 2>/dev/null || echo 3000)"
+  if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT/api/state" | grep -q 200; then
+    echo "server responding on http://localhost:$PORT"
+  else
+    echo "server NOT responding on port $PORT"
+  fi
+  exit 0
+fi
+
 # ---------------------------------------------------------------------------
 # Uninstall service and exit, if requested
 # ---------------------------------------------------------------------------
 if [ "${1:-}" = "--uninstall-service" ]; then
   if [ -f "$PLIST_PATH" ]; then
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || launchctl unload "$PLIST_PATH" 2>/dev/null || true
     rm -f "$PLIST_PATH"
     info "launchd service removed."
   else
@@ -98,6 +132,10 @@ info "Created start.command (first double-click: right-click > Open to pass Gate
 # ---------------------------------------------------------------------------
 if [ "${1:-}" = "--service" ]; then
   NODE_BIN="$(command -v node)"
+  [ -x "$NODE_BIN" ] || fail "node binary not found/executable at '$NODE_BIN'"
+  [ -f "$SERVER_DIR/server.js" ] || fail "server.js not found at $SERVER_DIR"
+  [ -d "$SERVER_DIR/node_modules" ] || fail "node_modules missing — npm install did not complete"
+  NODE_DIR="$(dirname "$NODE_BIN")"
   mkdir -p "$HOME/Library/LaunchAgents" "$SERVER_DIR/logs"
   cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -108,6 +146,11 @@ if [ "${1:-}" = "--service" ]; then
   <key>ProgramArguments</key>
   <array><string>$NODE_BIN</string><string>$SERVER_DIR/server.js</string></array>
   <key>WorkingDirectory</key><string>$SERVER_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$NODE_DIR:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key><string>$HOME</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$SERVER_DIR/logs/out.log</string>
@@ -115,9 +158,17 @@ if [ "${1:-}" = "--service" ]; then
 </dict>
 </plist>
 EOF
-  launchctl unload "$PLIST_PATH" 2>/dev/null || true
-  launchctl load "$PLIST_PATH"
-  info "launchd service installed and started (logs in server/logs/)."
+  launchctl bootout "gui/$(id -u)/$PLIST_LABEL" 2>/dev/null || true
+  if ! launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"; then
+    warn "bootstrap failed, falling back to legacy load"
+    launchctl load "$PLIST_PATH"
+  fi
+  sleep 2
+  if launchctl list | grep "$PLIST_LABEL" | awk '{exit ($1=="-")}'; then
+    info "launchd service installed and running (logs in server/logs/)."
+  else
+    warn "service registered but not running — run ./install-mac.sh --status for details"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

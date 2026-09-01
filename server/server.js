@@ -1,5 +1,5 @@
 /**
- * ATEM Web Tally — https://github.com/YOURNAME/atem-web-tally
+ * ATEM Web Tally — https://github.com/jithin001/atem-web-tally
  * MIT License · Built by Jithin Mathew (https://jithinmathew.com)
  *
  * - Single connection to the ATEM (atem-connection)
@@ -164,6 +164,15 @@ function broadcastTally() {
   txSock.send(buf, config.broadcastPort, config.broadcastAddress, (err) => {
     if (err) console.error('[udp] broadcast error:', err.message);
   });
+  // Unicast mirror: WiFi APs buffer unicast for power-saving clients reliably,
+  // but often delay or drop broadcast/multicast to them. Every device we've
+  // heard from recently also gets the same packet addressed directly.
+  const cutoff = Date.now() - 120000;
+  for (const dev of liveDevices.values()) {
+    if (dev.ip && dev.lastSeen > cutoff) {
+      txSock.send(buf, config.broadcastPort, dev.ip, () => {});
+    }
+  }
 }
 setInterval(broadcastTally, config.heartbeatMs);
 
