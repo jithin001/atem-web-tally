@@ -106,6 +106,23 @@ let tally = new Uint8Array(config.cameraCount);
 let seq = 0;
 let atemConnected = false;
 const liveDevices = new Map();
+const pendingCmds = new Map(); // mac -> 'off' | 'reboot' (one-shot)
+
+// Push this device's current config (and any pending command) immediately,
+// without waiting for its next 30 s status cycle.
+function pushConfigToDevice(mac) {
+  const live = liveDevices.get(mac);
+  const devCfg = config.devices[mac];
+  if (!live || !live.ip || !live.port || !devCfg) return false;
+  const payload = Buffer.from(JSON.stringify({
+    cam: devCfg.camera, name: devCfg.name,
+    pgmBright: devCfg.pgmBright ?? 255, pvwBright: devCfg.pvwBright ?? 60,
+    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames(),
+    ...(pendingCmds.get(mac) ? { cmd: pendingCmds.get(mac) } : {})
+  }));
+  rxSock.send(payload, live.port, live.ip);
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // ATEM connection (read path; command path is gated far below)
@@ -214,7 +231,9 @@ rxSock.on('message', (msg, rinfo) => {
 
   liveDevices.set(mac, {
     ...devCfg,
+    port: rinfo.port,
     batt: report.batt ?? null, etaMin: report.eta ?? null, rssi: report.rssi ?? null,
+    battMv: report.mv ?? null, charging: report.chg ?? null,
     uptime: report.up ?? null, fw: report.fw ?? null, ip: rinfo.address, lastSeen: Date.now()
   });
 
@@ -225,8 +244,10 @@ rxSock.on('message', (msg, rinfo) => {
   const reply = Buffer.from(JSON.stringify({
     cam: devCfg.camera, name: devCfg.name,
     pgmBright: devCfg.pgmBright ?? 255, pvwBright: devCfg.pvwBright ?? 60,
-    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames()
+    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames(),
+    ...(pendingCmds.get(mac) ? { cmd: pendingCmds.get(mac) } : {})
   }));
+  pendingCmds.delete(mac);
   rxSock.send(reply, rinfo.port, rinfo.address);
   dbg(`status from ${mac} batt=${report.batt}% -> cam ${devCfg.camera}`);
   pushToWebClients();
@@ -271,6 +292,7 @@ function stateSnapshot() {
         return [mac, {
           ...devCfg,
           batt: live?.batt ?? null, etaMin: live?.etaMin ?? null, rssi: live?.rssi ?? null,
+          battMv: live?.battMv ?? null, charging: live?.charging ?? null,
           ip: live?.ip ?? null, lastSeen: live?.lastSeen ?? null,
           online: !!(live && Date.now() - live.lastSeen < 90000)
         }];
@@ -369,8 +391,21 @@ app.post('/api/devices/:mac', requireAuthIfConfigured, (req, res) => {
   if (name !== undefined) config.devices[mac].name = String(name);
   if (pgmBright !== undefined) config.devices[mac].pgmBright = Math.min(255, Math.max(1, Number(pgmBright)));
   if (pvwBright !== undefined) config.devices[mac].pvwBright = Math.min(255, Math.max(1, Number(pvwBright)));
-  saveConfig(); pushToWebClients();
+  saveConfig();
+  pushConfigToDevice(mac);        // brightness/camera apply within a second
+  pushToWebClients();
   res.json({ ok: true, device: config.devices[mac] });
+});
+
+// One-shot device commands: proper power-off (so nothing drains overnight) or reboot.
+app.post('/api/devices/:mac/cmd', requireAuthIfConfigured, (req, res) => {
+  const mac = req.params.mac.toUpperCase();
+  const cmd = String(req.body.cmd || '');
+  if (!config.devices[mac]) return res.status(404).json({ error: 'unknown device' });
+  if (cmd !== 'off' && cmd !== 'reboot') return res.status(400).json({ error: 'bad cmd' });
+  pendingCmds.set(mac, cmd);
+  const sent = pushConfigToDevice(mac);   // instant if we know its address;
+  res.json({ ok: true, delivered: sent });// otherwise it rides the next status reply
 });
 
 app.delete('/api/devices/:mac', requireAuthIfConfigured, (req, res) => {

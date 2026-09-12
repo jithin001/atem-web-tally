@@ -1,0 +1,228 @@
+diff --git a/firmware/src/main.cpp b/firmware/src/main.cpp
+index f22730b..271fec6 100644
+--- a/firmware/src/main.cpp
++++ b/firmware/src/main.cpp
+@@ -248,6 +248,8 @@ static void sendStatus(int setCam = -1) {
+   doc["mac"]  = macStr;
+   doc["batt"] = (battPct >= 0) ? (int)battPct : (int)-1;
+   if (battPct >= 0 && battPct <= LOW_BATT_PCT && etaMin > 0) doc["eta"] = etaMin;
++  doc["mv"]   = M5.Power.getBatteryVoltage();          // battery millivolts
++  doc["chg"]  = (int)M5.Power.isCharging();            // 0=no, 1=yes, 2=unknown
+   doc["rssi"] = WiFi.RSSI();
+   doc["up"]   = millis() / 1000;
+   doc["fw"]   = FW_VERSION;
+@@ -277,6 +279,27 @@ static void handleConfigReply() {
+   maxCam    = doc["maxCam"]    | DEFAULT_CAM_COUNT;
+   if (maxCam >= MAX_CAM_SLOTS) maxCam = MAX_CAM_SLOTS - 1;
+   if (doc["name"].is<const char*>()) strlcpy(myName, doc["name"], sizeof(myName));
++  // Brightness changes apply immediately if the screen is currently lit.
++  if (state == TallyState::PROGRAM || state == TallyState::PREVIEW) drawnState = TallyState::BOOT;
++  // One-shot remote commands from the admin page.
++  const char* cmd = doc["cmd"] | "";
++  if (strcmp(cmd, "off") == 0) {
++    Serial.println("[cmd] power off requested by admin");
++    screenWake(80);
++    M5.Display.fillScreen(TFT_BLACK);
++    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
++    M5.Display.setFont(&fonts::Font4);
++    M5.Display.setTextDatum(middle_center);
++    M5.Display.drawString("POWER", M5.Display.width() / 2, M5.Display.height() / 2 - 16);
++    M5.Display.drawString("OFF",   M5.Display.width() / 2, M5.Display.height() / 2 + 16);
++    sendStatus();               // final report so the admin sees a fresh lastSeen
++    delay(1500);
++    M5.Power.powerOff();        // NOTE: with USB plugged, the PMIC may restart instead
++  } else if (strcmp(cmd, "reboot") == 0) {
++    Serial.println("[cmd] reboot requested by admin");
++    delay(200);
++    ESP.restart();
++  }
+   if (doc["inputs"].is<JsonObject>()) {
+     for (int i = 1; i <= maxCam; i++) {
+       char key[4]; snprintf(key, sizeof(key), "%d", i);
+@@ -374,6 +397,7 @@ void setup() {
+   M5.begin(cfg);   // board selection: -DM5GFX_BOARD in platformio.ini (see README)
+   Serial.printf("[boot] fw %s board=%d batt=%d%%\n", FW_VERSION, (int)M5.getBoard(), M5.Power.getBatteryLevel());
+   Serial.printf("[boot] display %dx%d\n", M5.Display.width(), M5.Display.height());
++  Serial.printf("[boot] batt %dmV charging=%d\n", M5.Power.getBatteryVoltage(), (int)M5.Power.isCharging());
+   M5.Display.setRotation(SCREEN_ROTATION);
+   screenWake(80);
+   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+@@ -390,6 +414,8 @@ void setup() {
+   while (WiFi.status() != WL_CONNECTED) { delay(200); M5.update(); }
+   Serial.printf("[wifi] connected ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // MAX_MODEM skips beacons and misses broadcasts
++  setCpuFrequencyMhz(80);              // 240 MHz -> 80 MHz: ~30 mA saved; WiFi needs >= 80
++  Serial.printf("[boot] cpu %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
+ 
+   snprintf(macStr, sizeof(macStr), "%s", WiFi.macAddress().c_str());
+ 
+diff --git a/server/public/admin.html b/server/public/admin.html
+index 89edac1..f32fa87 100644
+--- a/server/public/admin.html
++++ b/server/public/admin.html
+@@ -66,8 +66,8 @@
+     <div class="card-body">
+       <table id="devTable" class="table table-striped table-sm w-100">
+         <thead><tr>
+-          <th>Status</th><th>Name</th><th>MAC</th><th>IP</th><th>Camera</th>
+-          <th>Battery</th><th>ETA</th><th>RSSI</th><th>Last seen</th><th></th>
++          <th>Status</th><th>Name</th><th>Camera</th>
++          <th>Battery</th><th>Brightness</th><th>ETA</th><th>RSSI</th><th>Last seen</th><th>Actions</th>
+         </tr></thead>
+         <tbody></tbody>
+       </table>
+@@ -108,8 +108,8 @@ async function api(url, opts = {}) {
+ }
+ 
+ const table = $('#devTable').DataTable({
+-  paging: false, info: false, searching: true, order: [[4, 'asc']],
+-  columnDefs: [{ orderable: false, targets: [9] }]
++  paging: false, info: false, searching: true, order: [[2, 'asc']],
++  columnDefs: [{ orderable: false, targets: [4, 8] }]
+ });
+ 
+ function fmtAgo(ts) {
+@@ -186,15 +186,35 @@ function render() {
+     }
+     table.row.add([
+       `<span class="dot ${d.online ? 'dot-on' : 'dot-off'}"></span>${d.online ? 'online' : 'offline'}`,
+-      `<input class="form-control form-control-sm dev-name" data-mac="${mac}" value="${d.name || ''}">`,
+-      `<code>${mac}</code>`,
+-      d.ip || '—',
+-      `<select class="form-select form-select-sm dev-cam" style="width:160px" data-mac="${mac}">${opts}</select>`,
+-      d.batt === null ? '—' : `<span class="${low ? 'batt-low' : ''}">${d.batt}%</span>`,
++      `<input class="form-control form-control-sm dev-name" data-mac="${mac}" value="${d.name || ''}">
++       <small class="text-secondary"><code>${mac}</code>${d.ip ? ' · ' + d.ip : ''}</small>`,
++      `<select class="form-select form-select-sm dev-cam" style="width:150px" data-mac="${mac}">${opts}</select>`,
++      d.batt === null ? '—'
++        : `<span class="${low ? 'batt-low' : ''}">${d.batt}%</span>
++           ${d.charging === 1 ? '<span class="badge text-bg-success ms-1">charging</span>' : ''}
++           ${d.battMv ? `<br><small class="text-secondary">${(d.battMv/1000).toFixed(2)} V</small>` : ''}`,
++      `<div style="min-width:150px">
++         <div class="d-flex align-items-center gap-1">
++           <small style="width:14px">L</small>
++           <input type="range" class="form-range dev-bright" data-mac="${mac}" data-k="pgmBright"
++                  min="10" max="100" value="${Math.round((d.pgmBright ?? 255) / 2.55)}">
++           <small class="bval" style="width:34px">${Math.round((d.pgmBright ?? 255) / 2.55)}%</small>
++         </div>
++         <div class="d-flex align-items-center gap-1">
++           <small style="width:14px">P</small>
++           <input type="range" class="form-range dev-bright" data-mac="${mac}" data-k="pvwBright"
++                  min="10" max="100" value="${Math.round((d.pvwBright ?? 60) / 2.55)}">
++           <small class="bval" style="width:34px">${Math.round((d.pvwBright ?? 60) / 2.55)}%</small>
++         </div>
++       </div>`,
+       d.etaMin ? `~${d.etaMin} min` : '—',
+       d.rssi ? `${d.rssi} dBm` : '—',
+       fmtAgo(d.lastSeen),
+-      `<button class="btn btn-sm btn-outline-danger dev-del" data-mac="${mac}">Remove</button>`
++      `<div class="btn-group btn-group-sm">
++         <button class="btn btn-outline-warning dev-cmd" data-mac="${mac}" data-cmd="reboot" title="Reboot unit">↻</button>
++         <button class="btn btn-outline-danger dev-cmd" data-mac="${mac}" data-cmd="off" title="Power off unit">⏻</button>
++         <button class="btn btn-outline-secondary dev-del" data-mac="${mac}" title="Remove from list">✕</button>
++       </div>`
+     ]);
+   }
+   table.draw(false);
+@@ -232,6 +252,18 @@ $(document).on('change', '.dev-cam, .dev-name', function () {
+   const body = this.classList.contains('dev-cam') ? { camera: this.value } : { name: this.value };
+   api(`/api/devices/${this.dataset.mac}`, { method: 'POST', body: JSON.stringify(body) });
+ });
++$(document).on('input', '.dev-bright', function () {
++  this.parentElement.querySelector('.bval').textContent = this.value + '%';
++});
++$(document).on('change', '.dev-bright', function () {
++  const body = {}; body[this.dataset.k] = Math.round(this.value * 2.55);
++  api(`/api/devices/${this.dataset.mac}`, { method: 'POST', body: JSON.stringify(body) });
++});
++$(document).on('click', '.dev-cmd', function () {
++  const cmd = this.dataset.cmd;
++  if (cmd === 'off' && !confirm('Power off this tally? You will need to press its side button to turn it back on.')) return;
++  api(`/api/devices/${this.dataset.mac}/cmd`, { method: 'POST', body: JSON.stringify({ cmd }) });
++});
+ $(document).on('click', '.dev-del', function () {
+   if (confirm('Remove this device?')) api(`/api/devices/${this.dataset.mac}`, { method: 'DELETE' });
+ });
+diff --git a/server/server.js b/server/server.js
+index a323a22..3f0a375 100644
+--- a/server/server.js
++++ b/server/server.js
+@@ -106,6 +106,23 @@ let tally = new Uint8Array(config.cameraCount);
+ let seq = 0;
+ let atemConnected = false;
+ const liveDevices = new Map();
++const pendingCmds = new Map(); // mac -> 'off' | 'reboot' (one-shot)
++
++// Push this device's current config (and any pending command) immediately,
++// without waiting for its next 30 s status cycle.
++function pushConfigToDevice(mac) {
++  const live = liveDevices.get(mac);
++  const devCfg = config.devices[mac];
++  if (!live || !live.ip || !live.port || !devCfg) return false;
++  const payload = Buffer.from(JSON.stringify({
++    cam: devCfg.camera, name: devCfg.name,
++    pgmBright: devCfg.pgmBright ?? 255, pvwBright: devCfg.pvwBright ?? 60,
++    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames(),
++    ...(pendingCmds.get(mac) ? { cmd: pendingCmds.get(mac) } : {})
++  }));
++  rxSock.send(payload, live.port, live.ip);
++  return true;
++}
+ 
+ // ---------------------------------------------------------------------------
+ // ATEM connection (read path; command path is gated far below)
+@@ -214,7 +231,9 @@ rxSock.on('message', (msg, rinfo) => {
+ 
+   liveDevices.set(mac, {
+     ...devCfg,
++    port: rinfo.port,
+     batt: report.batt ?? null, etaMin: report.eta ?? null, rssi: report.rssi ?? null,
++    battMv: report.mv ?? null, charging: report.chg ?? null,
+     uptime: report.up ?? null, fw: report.fw ?? null, ip: rinfo.address, lastSeen: Date.now()
+   });
+ 
+@@ -225,8 +244,10 @@ rxSock.on('message', (msg, rinfo) => {
+   const reply = Buffer.from(JSON.stringify({
+     cam: devCfg.camera, name: devCfg.name,
+     pgmBright: devCfg.pgmBright ?? 255, pvwBright: devCfg.pvwBright ?? 60,
+-    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames()
++    hbMs: config.heartbeatMs, maxCam: config.cameraCount, inputs: inputNames(),
++    ...(pendingCmds.get(mac) ? { cmd: pendingCmds.get(mac) } : {})
+   }));
++  pendingCmds.delete(mac);
+   rxSock.send(reply, rinfo.port, rinfo.address);
+   dbg(`status from ${mac} batt=${report.batt}% -> cam ${devCfg.camera}`);
+   pushToWebClients();
+@@ -271,6 +292,7 @@ function stateSnapshot() {
+         return [mac, {
+           ...devCfg,
+           batt: live?.batt ?? null, etaMin: live?.etaMin ?? null, rssi: live?.rssi ?? null,
++          battMv: live?.battMv ?? null, charging: live?.charging ?? null,
+           ip: live?.ip ?? null, lastSeen: live?.lastSeen ?? null,
+           online: !!(live && Date.now() - live.lastSeen < 90000)
+         }];
+@@ -369,10 +391,23 @@ app.post('/api/devices/:mac', requireAuthIfConfigured, (req, res) => {
+   if (name !== undefined) config.devices[mac].name = String(name);
+   if (pgmBright !== undefined) config.devices[mac].pgmBright = Math.min(255, Math.max(1, Number(pgmBright)));
+   if (pvwBright !== undefined) config.devices[mac].pvwBright = Math.min(255, Math.max(1, Number(pvwBright)));
+-  saveConfig(); pushToWebClients();
++  saveConfig();
++  pushConfigToDevice(mac);        // brightness/camera apply within a second
++  pushToWebClients();
+   res.json({ ok: true, device: config.devices[mac] });
+ });
+ 
++// One-shot device commands: proper power-off (so nothing drains overnight) or reboot.
++app.post('/api/devices/:mac/cmd', requireAuthIfConfigured, (req, res) => {
++  const mac = req.params.mac.toUpperCase();
++  const cmd = String(req.body.cmd || '');
++  if (!config.devices[mac]) return res.status(404).json({ error: 'unknown device' });
++  if (cmd !== 'off' && cmd !== 'reboot') return res.status(400).json({ error: 'bad cmd' });
++  pendingCmds.set(mac, cmd);
++  const sent = pushConfigToDevice(mac);   // instant if we know its address;
++  res.json({ ok: true, delivered: sent });// otherwise it rides the next status reply
++});
++
+ app.delete('/api/devices/:mac', requireAuthIfConfigured, (req, res) => {
+   const mac = req.params.mac.toUpperCase();
+   delete config.devices[mac];

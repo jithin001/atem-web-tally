@@ -248,6 +248,8 @@ static void sendStatus(int setCam = -1) {
   doc["mac"]  = macStr;
   doc["batt"] = (battPct >= 0) ? (int)battPct : (int)-1;
   if (battPct >= 0 && battPct <= LOW_BATT_PCT && etaMin > 0) doc["eta"] = etaMin;
+  doc["mv"]   = M5.Power.getBatteryVoltage();          // battery millivolts
+  doc["chg"]  = (int)M5.Power.isCharging();            // 0=no, 1=yes, 2=unknown
   doc["rssi"] = WiFi.RSSI();
   doc["up"]   = millis() / 1000;
   doc["fw"]   = FW_VERSION;
@@ -277,6 +279,27 @@ static void handleConfigReply() {
   maxCam    = doc["maxCam"]    | DEFAULT_CAM_COUNT;
   if (maxCam >= MAX_CAM_SLOTS) maxCam = MAX_CAM_SLOTS - 1;
   if (doc["name"].is<const char*>()) strlcpy(myName, doc["name"], sizeof(myName));
+  // Brightness changes apply immediately if the screen is currently lit.
+  if (state == TallyState::PROGRAM || state == TallyState::PREVIEW) drawnState = TallyState::BOOT;
+  // One-shot remote commands from the admin page.
+  const char* cmd = doc["cmd"] | "";
+  if (strcmp(cmd, "off") == 0) {
+    Serial.println("[cmd] power off requested by admin");
+    screenWake(80);
+    M5.Display.fillScreen(TFT_BLACK);
+    M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+    M5.Display.setFont(&fonts::Font4);
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString("POWER", M5.Display.width() / 2, M5.Display.height() / 2 - 16);
+    M5.Display.drawString("OFF",   M5.Display.width() / 2, M5.Display.height() / 2 + 16);
+    sendStatus();               // final report so the admin sees a fresh lastSeen
+    delay(1500);
+    M5.Power.powerOff();        // NOTE: with USB plugged, the PMIC may restart instead
+  } else if (strcmp(cmd, "reboot") == 0) {
+    Serial.println("[cmd] reboot requested by admin");
+    delay(200);
+    ESP.restart();
+  }
   if (doc["inputs"].is<JsonObject>()) {
     for (int i = 1; i <= maxCam; i++) {
       char key[4]; snprintf(key, sizeof(key), "%d", i);
@@ -374,6 +397,7 @@ void setup() {
   M5.begin(cfg);   // board selection: -DM5GFX_BOARD in platformio.ini (see README)
   Serial.printf("[boot] fw %s board=%d batt=%d%%\n", FW_VERSION, (int)M5.getBoard(), M5.Power.getBatteryLevel());
   Serial.printf("[boot] display %dx%d\n", M5.Display.width(), M5.Display.height());
+  Serial.printf("[boot] batt %dmV charging=%d\n", M5.Power.getBatteryVoltage(), (int)M5.Power.isCharging());
   M5.Display.setRotation(SCREEN_ROTATION);
   screenWake(80);
   M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -390,6 +414,8 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) { delay(200); M5.update(); }
   Serial.printf("[wifi] connected ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);  // MAX_MODEM skips beacons and misses broadcasts
+  setCpuFrequencyMhz(80);              // 240 MHz -> 80 MHz: ~30 mA saved; WiFi needs >= 80
+  Serial.printf("[boot] cpu %lu MHz\n", (unsigned long)getCpuFrequencyMhz());
 
   snprintf(macStr, sizeof(macStr), "%s", WiFi.macAddress().c_str());
 
